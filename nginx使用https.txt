@@ -1,0 +1,102 @@
+Nginx 使用 https 的优化
+
+以下是调整的具体内容：
+worker_process 设置为机器CPU总核数；
+　　worker_processes  8;
+　　
+TLS开销在握手阶段，开启keepalive和Keep-Alive；
+sysctl.conf:
+　　net.ipv4.tcp_keepalive_intvl = 30
+　　net.ipv4.tcp_keepalive_probes = 5
+　　net.ipv4.tcp_keepalive_time = 7200
+nginx.conf:
+keepalive_timeout  300;
+　　upstream {
+　　keepalive       32;
+　　}
+　　
+开启ssl session；
+　　ssl_session_timeout     1d;
+　　ssl_session_cache       shared:SSL:50m;
+　　# cd /etc/ssl/certs; openssl rand 48 > tls_session_ticket.key
+　　ssl_session_ticket_key  /etc/ssl/certs/tls_session_ticket.key;
+　　ssl_session_tickets     on;
+　　
+Openssl升级到1.0.1+（我使用了1.0.2c）
+　　
+若关闭kDHE、ECDHE等算法，性能将大幅度提升（本次测试性能提升最大的点）；
+　　ssl_ciphers     ALL:!kEDH!ADH:RC4+RSA:+HIGH:+SSLv2:+EXP;
+　　ssl_prefer_server_ciphers   on;
+　　
+64位系统编译openssl加上enable-ec_nistp_64_gcc_128选项；
+
+增大somaxconn参数：
+sysctl:
+　　net.core.somaxconn = 12800
+
+根据facebook和google的实践，使用ECDSA证书替代RSA2048，但我未使用；
+
+有文章提到编译openssl和nginx时使用-O3，强烈不建议使用，参考：
+　　https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html
+　　https://wiki.gentoo.org/wiki/GCC_optimization
+-O3: the highest level of optimization possible. It enables optimizations that are expensive in terms of compile time and memory usage. Compiling with -O3 is not a guaranteed way to improve performance, and in fact, in many cases, can slow down a system due to larger binaries and increased memory usage. -O3 is also known to break several packages. Using -O3 is not recommended.
+　　
+可使用google的tcmalloc或bsd的jemalloc替代ptmalloc编译，我不太了解内存分配几种方式的原理，看网上的测试结果，mmap性能大概有20%的提升，但是测试发现https消耗基本全在CPU，所以内存相关的优化未采用；
+
+其他配置：如multi_accept、tcp_nopush/nodelay 等。
+
+
+附一
+openssl编译参数和安装命令：
+
+make dclean
+
+# 较重要的参数包括：支持threads，x64机器使用linux-x86_64 enable-ec_nistp_64_gcc_128，禁用部分功能，避免heartbleed、crime、poodle等攻击：
+./Configure \
+ --prefix=/usr/local/openssl-1.0.2c \
+ linux-x86_64 enable-ec_nistp_64_gcc_128 \
+ no-shared \
+ threads \
+ no-deprecated \
+ no-dynamic-engine \
+ no-zlib \
+ no-bf \
+ no-buf-freelists \
+ no-cast \
+ no-comp \
+ no-dtls1 \
+ no-decc-init \
+ no-dsa \
+ no-gmp \
+ no-gost \
+ no-heartbeats \
+ no-idea \
+ no-jpake \
+ no-krb5 \
+ no-libunbound \
+ no-md2 \
+ no-md4 \
+ no-mdc2 \
+ no-psk \
+ no-rc2 \
+ no-rc5 \
+ no-sctp \
+ no-sha0 \
+ no-srp \
+ no-srtp \
+ no-ssl2 \
+ no-ssl3 \
+ no-ssl3-method \
+ no-unit-test
+
+make depend
+make
+make install
+
+附二
+nginx配置
+
+
+附三
+sysctl
+
